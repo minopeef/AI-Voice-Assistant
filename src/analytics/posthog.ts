@@ -31,7 +31,7 @@ const POSTHOG_HOST = 'https://us.i.posthog.com';
 
 interface QueuedEvent {
   event: string;
-  properties: Record<string, any>;
+  properties: Record<string, unknown>;
   timestamp: string;
 }
 
@@ -65,48 +65,41 @@ class PostHog {
     }
   }
 
-  private getDistinctId(): string {
-    if (this.distinctId) return this.distinctId;
+  /**
+   * Reads a persistent UUID from userData/<filename>; creates and writes a
+   * fresh one on first use. Falls back to calling `fallback()` if the
+   * filesystem is unavailable (e.g. sandboxed or permission error).
+   */
+  private readOrCreatePersistentId(filename: string, fallback?: () => string): string {
     try {
-      const idPath = path.join(app.getPath('userData'), 'posthog-distinct-id');
+      const idPath = path.join(app.getPath('userData'), filename);
       if (fs.existsSync(idPath)) {
         const stored = fs.readFileSync(idPath, 'utf8').trim();
-        if (stored) {
-          this.distinctId = stored;
-          return stored;
-        }
+        if (stored) return stored;
       }
       const fresh = crypto.randomUUID();
       fs.writeFileSync(idPath, fresh, 'utf8');
-      this.distinctId = fresh;
       return fresh;
-    } catch (e) {
-      // If filesystem fails, fall back to in-memory ID (resets every launch).
-      this.distinctId = crypto.randomUUID();
-      return this.distinctId;
+    } catch {
+      return fallback ? fallback() : crypto.randomUUID();
     }
+  }
+
+  private getDistinctId(): string {
+    if (this.distinctId) return this.distinctId;
+    this.distinctId = this.readOrCreatePersistentId('posthog-distinct-id');
+    return this.distinctId;
   }
 
   private getDeviceId(): string {
     if (this.deviceId) return this.deviceId;
-    try {
-      const idPath = path.join(app.getPath('userData'), 'posthog-device-id');
-      if (fs.existsSync(idPath)) {
-        const stored = fs.readFileSync(idPath, 'utf8').trim();
-        if (stored) {
-          this.deviceId = stored;
-          return stored;
-        }
-      }
-      const fresh = crypto.randomUUID();
-      fs.writeFileSync(idPath, fresh, 'utf8');
-      this.deviceId = fresh;
-      return fresh;
-    } catch {
-      // No disk → reuse the distinct_id as a fallback so events still carry a stable value
-      this.deviceId = this.getDistinctId();
-      return this.deviceId;
-    }
+    // When the filesystem is unavailable, reuse distinct_id as device_id so
+    // events still carry a stable value within the session.
+    this.deviceId = this.readOrCreatePersistentId(
+      'posthog-device-id',
+      () => this.getDistinctId()
+    );
+    return this.deviceId;
   }
 
   private getSessionId(): string {
@@ -128,7 +121,7 @@ class PostHog {
     return this.appVersion;
   }
 
-  capture(event: string, properties: Record<string, any> = {}): void {
+  capture(event: string, properties: Record<string, unknown> = {}): void {
     if (!this.isEnabled()) return;
     this.queue.push({
       event,
@@ -180,7 +173,10 @@ class PostHog {
         signal: controller.signal
       });
     } catch (err) {
-      Logger.debug('[posthog] flush failed (ignored):', err);
+      Logger.debug('[posthog] flush failed, re-queuing events:', err);
+      // Re-queue events at the front, capped to MAX_QUEUE to prevent unbounded growth.
+      const slots = Math.max(0, this.MAX_QUEUE - this.queue.length);
+      this.queue.unshift(...batch.slice(0, slots));
     } finally {
       clearTimeout(t);
     }
