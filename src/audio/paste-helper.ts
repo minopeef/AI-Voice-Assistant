@@ -9,14 +9,9 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { Logger } from '../core/logger';
 
-// Permission caching
 let lastPermissionCheck = 0;
 const permissionCheckInterval = 5 * 60 * 1000; // 5 minutes
 let cachedPermissionStatus = true;
-
-// Fast permission cache for paste operations
-const fastPermissionCache = { valid: false, timestamp: 0 };
-const FAST_CACHE_DURATION = 30000; // 30 seconds
 
 /**
  * Check if the app has system permissions for accessibility (with caching)
@@ -37,31 +32,28 @@ export async function checkSystemPermissions(): Promise<boolean> {
     `;
 
     const result = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (val: boolean) => { if (!settled) { settled = true; resolve(val); } };
+
       const proc = spawn('osascript', ['-e', testScript]);
       let output = '';
       let error = '';
 
-      proc.stdout.on('data', (data) => {
-        output += data.toString();
-      });
-
-      proc.stderr.on('data', (data) => {
-        error += data.toString();
-      });
+      proc.stdout.on('data', (data) => { output += data.toString(); });
+      proc.stderr.on('data', (data) => { error += data.toString(); });
 
       proc.on('close', (code) => {
         if (code === 0 && output.trim() === 'true') {
-          resolve(true);
+          settle(true);
         } else {
           Logger.warning('System Events permission check failed:', error);
-          resolve(false);
+          settle(false);
         }
       });
 
-      // Timeout after 3 seconds
       setTimeout(() => {
         proc.kill();
-        resolve(false);
+        settle(false);
       }, 3000);
     });
 
@@ -177,8 +169,8 @@ export async function fastPasteMethod(text: string): Promise<boolean> {
         Logger.warning('🔧 [Native Paste] typing_monitor required but returned null/undefined');
         return false;
       }
-    } catch (webpackError) {
-      Logger.debug(`🔧 [Native Paste] typing_monitor native module not found or failed to load: ${webpackError.message}`);
+    } catch (webpackError: unknown) {
+      Logger.debug(`🔧 [Native Paste] typing_monitor native module not found or failed to load: ${(webpackError as Error).message}`);
       return false; // Fall back to AppleScript
     }
 

@@ -7,7 +7,7 @@ import * as fs from 'fs';
  * No FFmpeg dependency - works on every Mac
  */
 export class NativeAudioRecorder {
-  private nativeModule: any = null;
+  private nativeModule: Record<string, (...args: unknown[]) => unknown> | null = null;
   private isRecording = false;
   private audioChunks: Buffer[] = [];
   private recordingStartTime = 0;
@@ -19,14 +19,13 @@ export class NativeAudioRecorder {
 
   constructor() {
     try {
-      // Try to load the native module with static imports first
-      let nativeModule = null;
+      let nativeModule: Record<string, (...args: unknown[]) => unknown> | null = null;
       
       // Try different require strategies to work around webpack limitations
       try {
         // Method 1: Direct require for development
         nativeModule = eval('require')('../../build/Release/audio_capture.node');
-        Logger.debug('✅ [NativeAudio] Loaded via direct require (development)');
+          Logger.debug('✅ [NativeAudio] Loaded via direct require (development)');
       } catch (e1) {
         try {
           // Method 2: Try production path
@@ -92,37 +91,8 @@ export class NativeAudioRecorder {
       Logger.debug('🎤 Starting native audio recording...');
       Logger.debug(`[NativeAudio][Diagnostics] Native sample-rate probe available: ${typeof this.nativeModule.getCurrentSampleRate === 'function'}`);
 
-      // Start native audio capture with callback
-      const success = this.nativeModule.startCapture((audioBuffer: Buffer) => {
-        this.totalInputBytes += audioBuffer?.length || 0;
-
-        if (typeof this.nativeModule.getCurrentSampleRate === 'function') {
-          const detectedRate = Number(this.nativeModule.getCurrentSampleRate());
-          if (Number.isFinite(detectedRate) && detectedRate >= 8000 && detectedRate <= 192000 && detectedRate !== this.inputSampleRate) {
-            this.inputSampleRate = detectedRate;
-            Logger.debug(`🎙️ [NativeAudio] Detected input sample rate: ${detectedRate}Hz`);
-          }
-        }
-
-        const processedBuffer = this.ensure16kLinear16(audioBuffer);
-        this.totalOutputBytes += processedBuffer.length;
-
-        // Add normalized (16k) audio data to chunks
-        this.audioChunks.push(processedBuffer);
-
-        // Per-chunk sink for live-streaming consumers (sherpa-onnx OnlineRecognizer).
-        // Cheap: just a function call with the 16k PCM16 buffer. Any work the sink
-        // does is on the consumer's clock, not ours.
-        if (onChunk && processedBuffer.length > 0) {
-          try { onChunk(processedBuffer); } catch (e) { /* never let sink errors break capture */ }
-        }
-
-        // Calculate and report audio level
-        if (this.onAudioLevel) {
-          const level = this.calculateAudioLevel(processedBuffer);
-          this.onAudioLevel(level);
-        }
-      });
+      const captureCallback = this.buildCaptureCallback(onChunk);
+      const success = this.nativeModule!.startCapture(captureCallback) as boolean;
 
       if (!success) {
         throw new Error('Failed to start native audio capture');
@@ -155,28 +125,7 @@ export class NativeAudioRecorder {
             await new Promise(resolve => setTimeout(resolve, 100));
             
             // Try starting again
-            const retrySuccess = this.nativeModule.startCapture((audioBuffer: Buffer) => {
-              this.totalInputBytes += audioBuffer?.length || 0;
-
-              if (typeof this.nativeModule.getCurrentSampleRate === 'function') {
-                const detectedRate = Number(this.nativeModule.getCurrentSampleRate());
-                if (Number.isFinite(detectedRate) && detectedRate >= 8000 && detectedRate <= 192000 && detectedRate !== this.inputSampleRate) {
-                  this.inputSampleRate = detectedRate;
-                  Logger.debug(`🎙️ [NativeAudio] Detected input sample rate (retry): ${detectedRate}Hz`);
-                }
-              }
-
-              const processedBuffer = this.ensure16kLinear16(audioBuffer);
-              this.totalOutputBytes += processedBuffer.length;
-              this.audioChunks.push(processedBuffer);
-              if (onChunk && processedBuffer.length > 0) {
-                try { onChunk(processedBuffer); } catch (e) { /* ignore */ }
-              }
-              if (this.onAudioLevel) {
-                const level = this.calculateAudioLevel(processedBuffer);
-                this.onAudioLevel(level);
-              }
-            });
+            const retrySuccess = this.nativeModule!.startCapture(this.buildCaptureCallback(onChunk)) as boolean;
             
             if (retrySuccess) {
               // Re-validate the retry
@@ -300,6 +249,33 @@ export class NativeAudioRecorder {
     this.totalInputBytes = 0;
     this.totalOutputBytes = 0;
     Logger.debug('🚨 [NativeAudio] Emergency stop completed');
+  }
+
+  private buildCaptureCallback(onChunk?: (buf: Buffer) => void): (audioBuffer: Buffer) => void {
+    return (audioBuffer: Buffer) => {
+      this.totalInputBytes += audioBuffer?.length || 0;
+
+      if (typeof this.nativeModule!.getCurrentSampleRate === 'function') {
+        const detectedRate = Number(this.nativeModule!.getCurrentSampleRate());
+        if (Number.isFinite(detectedRate) && detectedRate >= 8000 && detectedRate <= 192000 && detectedRate !== this.inputSampleRate) {
+          this.inputSampleRate = detectedRate;
+          Logger.debug(`🎙️ [NativeAudio] Detected input sample rate: ${detectedRate}Hz`);
+        }
+      }
+
+      const processedBuffer = this.ensure16kLinear16(audioBuffer);
+      this.totalOutputBytes += processedBuffer.length;
+      this.audioChunks.push(processedBuffer);
+
+      if (onChunk && processedBuffer.length > 0) {
+        try { onChunk(processedBuffer); } catch (e) { /* never let sink errors break capture */ }
+      }
+
+      if (this.onAudioLevel) {
+        const level = this.calculateAudioLevel(processedBuffer);
+        this.onAudioLevel(level);
+      }
+    };
   }
 
   private ensure16kLinear16(chunk: Buffer): Buffer {

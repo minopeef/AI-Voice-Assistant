@@ -1,3 +1,5 @@
+import { Logger } from '../core/logger';
+
 export class FastWakeWordDetector {
   private isListening = false;
   private audioContext: AudioContext | null = null;
@@ -50,7 +52,7 @@ export class FastWakeWordDetector {
       this.isListening = true;
 
     } catch (error) {
-      console.error('Failed to start wake word detection:', error);
+      Logger.error('Failed to start wake word detection:', error);
     }
   }
 
