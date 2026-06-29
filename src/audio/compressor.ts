@@ -1,21 +1,31 @@
-import { exec, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-const ffmpeg = require('fluent-ffmpeg');
+import { Logger } from '../core/logger';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const ffmpeg = require('fluent-ffmpeg') as (input: string) => FluentFfmpegCommand;
+
+interface FluentFfmpegCommand {
+  setFfmpegPath(p: string): this;
+  audioChannels(n: number): this;
+  audioFrequency(n: number): this;
+  audioBitrate(b: string): this;
+  audioQuality(q: number): this;
+  format(f: string): this;
+  on(event: 'end', cb: () => void): this;
+  on(event: 'error', cb: (err: Error) => void): this;
+  save(out: string): this;
+}
 
 // Get FFmpeg path with multiple fallbacks
 function getFfmpegPath(): string {
   try {
-    // Check for bundled FFmpeg first
     const bundledPath = path.join(process.resourcesPath || __dirname, 'ffmpeg');
     if (fs.existsSync(bundledPath)) {
       return bundledPath;
     }
-    
-    // Use system FFmpeg (most macOS systems have this available)
     return 'ffmpeg';
   } catch (error) {
-    console.warn('FFmpeg path resolution failed, using system ffmpeg:', error);
+    Logger.warning('FFmpeg path resolution failed, using system ffmpeg:', error);
     return 'ffmpeg';
   }
 }
@@ -49,29 +59,30 @@ export class AudioCompressor {
     
     return new Promise((resolve, reject) => {
       const ffmpegPath = getFfmpegPath();
-      console.log(`🔧 Using FFmpeg path: ${ffmpegPath}`);
+      Logger.debug(`Using FFmpeg path: ${ffmpegPath}`);
       
       try {
-        // Create FFmpeg command with error handling
         const ffmpegCommand = ffmpeg(inputFile)
           .setFfmpegPath(ffmpegPath)
           .audioChannels(1)
           .audioFrequency(16000);
-        
-        // Set quality based on format and preference
+
         switch (outputFormat) {
-          case 'mp3':
+          case 'mp3': {
             const mp3Quality = quality === 'high' ? '64k' : quality === 'medium' ? '48k' : '32k';
             ffmpegCommand.audioBitrate(mp3Quality).format('mp3');
             break;
-          case 'm4a':
+          }
+          case 'm4a': {
             const m4aQuality = quality === 'high' ? '64k' : quality === 'medium' ? '48k' : '32k';
             ffmpegCommand.audioBitrate(m4aQuality).format('mp4');
             break;
-          case 'ogg':
+          }
+          case 'ogg': {
             const oggQuality = quality === 'high' ? 6 : quality === 'medium' ? 4 : 2;
             ffmpegCommand.audioQuality(oggQuality).format('ogg');
             break;
+          }
         }
         
         ffmpegCommand
@@ -90,7 +101,7 @@ export class AudioCompressor {
                 format: outputFormat
               };
               
-              console.log(`🗜️ FFmpeg compression: ${originalSize} → ${compressedSize} bytes (${compressionRatio.toFixed(1)}% smaller) in ${compressionTime}ms`);
+              Logger.info(`FFmpeg compression: ${originalSize} → ${compressedSize} bytes (${compressionRatio.toFixed(1)}% smaller) in ${compressionTime}ms`);
               
               resolve({ file: outputFile, stats });
             } else {
@@ -98,7 +109,7 @@ export class AudioCompressor {
             }
           })
           .on('error', (err: Error) => {
-            console.warn('FFmpeg compression failed, returning original file:', err.message);
+            Logger.warning('FFmpeg compression failed, returning original file:', err.message);
             // Return original file instead of failing
             resolve({
               file: inputFile,
@@ -114,7 +125,7 @@ export class AudioCompressor {
           .save(outputFile);
           
       } catch (error) {
-        console.warn('FFmpeg setup failed, returning original file:', error);
+        Logger.warning('FFmpeg setup failed, returning original file:', error);
         // Return original file if FFmpeg setup fails
         resolve({
           file: inputFile,
@@ -161,7 +172,7 @@ export class AudioCompressor {
       { format: 'ogg', quality: 'medium' }
     ];
     
-    console.log('🧪 Starting compression benchmark...');
+    Logger.info('Starting compression benchmark...');
     
     for (const { format, quality } of formats) {
       try {
@@ -175,16 +186,15 @@ export class AudioCompressor {
           // Ignore cleanup errors
         }
       } catch (error) {
-        console.warn(`Benchmark failed for ${format}/${quality}:`, error);
+        Logger.warning(`Benchmark failed for ${format}/${quality}:`, error);
       }
     }
-    
-    // Sort by best compression ratio
+
     results.sort((a, b) => b.compressionRatio - a.compressionRatio);
-    
-    console.log('📊 Benchmark Results (sorted by compression ratio):');
+
+    Logger.info('Benchmark Results (sorted by compression ratio):');
     results.forEach((stat, i) => {
-      console.log(`${i + 1}. ${stat.format}: ${stat.compressionRatio.toFixed(1)}% smaller in ${stat.compressionTime}ms`);
+      Logger.info(`${i + 1}. ${stat.format}: ${stat.compressionRatio.toFixed(1)}% smaller in ${stat.compressionTime}ms`);
     });
     
     return results;

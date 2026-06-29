@@ -60,13 +60,17 @@ export class WebAudioRecorder {
 
     return new Promise((resolve) => {
       this.mediaRecorder!.onstop = async () => {
-        // Convert recorded chunks to single buffer
-        const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
-        const arrayBuffer = await audioBlob.arrayBuffer();
-        
-        this.cleanup();
-        Logger.debug(`Audio captured: ${arrayBuffer.byteLength} bytes`);
-        resolve(arrayBuffer);
+        try {
+          const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+          const arrayBuffer = await audioBlob.arrayBuffer();
+          this.cleanup();
+          Logger.debug(`Audio captured: ${arrayBuffer.byteLength} bytes`);
+          resolve(arrayBuffer);
+        } catch (error) {
+          Logger.error('Failed to convert audio blob to buffer:', error);
+          this.cleanup();
+          resolve(null);
+        }
       };
 
       this.mediaRecorder!.stop();

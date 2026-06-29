@@ -1,10 +1,10 @@
 import { Logger } from '../core/logger';
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 
 export class FastAudioRecorder {
-  private recordingProcess: any = null;
+  private recordingProcess: ChildProcess | null = null;
   private isRecording = false;
   private audioChunks: Buffer[] = [];
   private recordingStartTime = 0;
