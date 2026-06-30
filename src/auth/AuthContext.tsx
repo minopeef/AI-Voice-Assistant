@@ -1,14 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useContext, createContext } from 'react';
 
-/**
- * Local Authentication Context for Open Source Build
- * Simple local user management - no cloud dependencies
- */
-
-type AppUser = { 
-  uid: string; 
-  email: string | null; 
-  displayName: string | null; 
+export type AppUser = {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
 };
 
 interface AuthContextType {
@@ -18,7 +13,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
 }
 
-const AuthContext = React.createContext<AuthContextType | null>(null);
+const AuthContext = createContext<AuthContextType | null>(null);
 
 const DEFAULT_USER: AppUser = {
   uid: 'local-user',
@@ -26,51 +21,53 @@ const DEFAULT_USER: AppUser = {
   displayName: 'Local User',
 };
 
+const STORAGE_KEY = 'jarvis_user';
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Initialize with local user
-    const savedUser = localStorage.getItem('jarvis_user');
-    if (savedUser) {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    let resolved: AppUser = DEFAULT_USER;
+    if (saved) {
       try {
-        setUser(JSON.parse(savedUser));
+        resolved = JSON.parse(saved) as AppUser;
       } catch {
-        setUser(DEFAULT_USER);
-        localStorage.setItem('jarvis_user', JSON.stringify(DEFAULT_USER));
+        // corrupted entry — fall back to default
       }
-    } else {
-      setUser(DEFAULT_USER);
-      localStorage.setItem('jarvis_user', JSON.stringify(DEFAULT_USER));
     }
+    setUser(resolved);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(resolved));
     setLoading(false);
   }, []);
 
-  const handleSignInWithGoogle = async () => {
+  const handleSignInWithGoogle = useCallback(async () => {
     setUser(DEFAULT_USER);
-    localStorage.setItem('jarvis_user', JSON.stringify(DEFAULT_USER));
-  };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_USER));
+  }, []);
 
-  const handleSignOut = async () => {
-    localStorage.removeItem('jarvis_user');
+  const handleSignOut = useCallback(async () => {
+    localStorage.removeItem(STORAGE_KEY);
     setUser(null);
-  };
+  }, []);
 
   return (
-    <AuthContext.Provider value={{ 
-      user, 
-      loading, 
-      signInWithGoogle: handleSignInWithGoogle, 
-      signOut: handleSignOut 
-    }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        signInWithGoogle: handleSignInWithGoogle,
+        signOut: handleSignOut,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
 };
 
-export const useAuth = () => {
-  const context = React.useContext(AuthContext);
+export const useAuth = (): AuthContextType => {
+  const context = useContext(AuthContext);
   if (!context) {
     throw new Error('useAuth must be used within AuthProvider');
   }
